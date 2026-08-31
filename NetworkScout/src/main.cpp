@@ -1,78 +1,120 @@
 #include <Arduino.h>
-#include <WiFi.h>
+#include <LovyanGFX.hpp>
 
-void printEncryption(wifi_auth_mode_t type)
+class NetworkScoutDisplay : public lgfx::LGFX_Device
 {
-    switch (type)
+    lgfx::Panel_ILI9341 panel;   // was Panel_ST7789 - wrong driver for this board
+    lgfx::Bus_SPI bus;
+    lgfx::Light_PWM light;       // proper backlight control instead of raw digitalWrite
+
+public:
+    NetworkScoutDisplay()
     {
-        case WIFI_AUTH_OPEN:          Serial.print("OPEN"); break;
-        case WIFI_AUTH_WEP:           Serial.print("WEP"); break;
-        case WIFI_AUTH_WPA_PSK:       Serial.print("WPA"); break;
-        case WIFI_AUTH_WPA2_PSK:      Serial.print("WPA2"); break;
-        case WIFI_AUTH_WPA_WPA2_PSK:  Serial.print("WPA/WPA2"); break;
-        case WIFI_AUTH_WPA2_ENTERPRISE: Serial.print("WPA2-ENT"); break;
-        case WIFI_AUTH_WPA3_PSK:      Serial.print("WPA3"); break;
-        case WIFI_AUTH_WPA2_WPA3_PSK: Serial.print("WPA2/WPA3"); break;
-        default:                       Serial.print("UNKNOWN"); break;
+        {
+            auto cfg = bus.config();
+
+            cfg.spi_host = VSPI_HOST;
+            cfg.spi_mode = 0;
+
+            cfg.freq_write = 40000000;
+            cfg.freq_read  = 16000000;
+
+            cfg.spi_3wire = true;
+            cfg.use_lock = true;
+            cfg.dma_channel = 1;
+
+            cfg.pin_sclk = 14;
+            cfg.pin_mosi = 13;
+            cfg.pin_miso = -1;   // reverted - this panel's MISO/SDO likely isn't wired, reading can hang init()
+            cfg.pin_dc   = 2;
+
+            bus.config(cfg);
+            panel.setBus(&bus);
+        }
+
+        {
+            auto cfg = panel.config();
+
+            cfg.pin_cs   = 15;
+            cfg.pin_rst  = -1;
+            cfg.pin_busy = -1;
+
+            cfg.panel_width  = 240;
+            cfg.panel_height = 320;
+
+            cfg.offset_x = 0;
+            cfg.offset_y = 0;
+            cfg.offset_rotation = 0;
+
+            cfg.dummy_read_pixel = 8;
+            cfg.dummy_read_bits  = 1;
+            cfg.readable  = false;  // reverted - avoid reading from a MISO line that likely isn't connected
+            cfg.invert    = false;   // many of these ILI9341 clones need this for correct (non-inverted) colors
+            cfg.rgb_order = false;   // many of these ILI9341 clones need this for correct (non-inverted) colors
+
+            cfg.bus_shared = true;
+
+            panel.config(cfg);
+        }
+
+        {
+            auto cfg = light.config();
+            cfg.pin_bl      = 27;   // confirmed by multimeter - this board's backlight is on 27, not 21
+            cfg.invert      = false;
+            cfg.freq        = 44100;
+            cfg.pwm_channel = 7;
+
+            light.config(cfg);
+            panel.setLight(&light);
+        }
+
+        setPanel(&panel);
     }
-}
+};
 
-void scanWiFi()
-{
-    Serial.println();
-    Serial.println("========================================");
-    Serial.println("       NETWORK SCOUT - WIFI SCAN");
-    Serial.println("========================================");
-
-    int count = WiFi.scanNetworks(false, true);
-
-    if (count <= 0)
-    {
-        Serial.println("No networks found.");
-        return;
-    }
-
-    Serial.printf("Found %d networks\n\n", count);
-
-    for (int i = 0; i < count; i++)
-    {
-        Serial.printf("%2d. %s\n",
-                      i + 1,
-                      WiFi.SSID(i).length() ? WiFi.SSID(i).c_str() : "<hidden>");
-
-        Serial.printf("    BSSID:    %s\n", WiFi.BSSIDstr(i).c_str());
-        Serial.printf("    RSSI:     %d dBm\n", WiFi.RSSI(i));
-        Serial.printf("    Channel:  %d\n", WiFi.channel(i));
-
-        Serial.print("    Security: ");
-        printEncryption(WiFi.encryptionType(i));
-        Serial.println();
-        Serial.println();
-    }
-
-    WiFi.scanDelete();
-}
+NetworkScoutDisplay tft;
 
 void setup()
 {
     Serial.begin(115200);
-    delay(1000);
+    delay(500);
 
-    Serial.println();
-    Serial.println("Network Scout booting...");
+    Serial.println("LovyanGFX display test starting (ILI9341 config)...");
 
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(250);
+    tft.init();
+    tft.setRotation(1);
+    tft.setBrightness(255);
 
-    Serial.print("ESP32 MAC: ");
-    Serial.println(WiFi.macAddress());
+    Serial.println("RED");
+    tft.fillScreen(TFT_RED);
+    delay(1200);
 
-    scanWiFi();
+    Serial.println("GREEN");
+    tft.fillScreen(TFT_GREEN);
+    delay(1200);
+
+    Serial.println("BLUE");
+    tft.fillScreen(TFT_BLUE);
+    delay(1200);
+
+    tft.fillScreen(TFT_BLACK);
+
+    tft.setTextColor(TFT_CYAN);
+    tft.setTextSize(3);
+    tft.setCursor(35, 80);
+    tft.print("NETWORK");
+
+    tft.setCursor(70, 120);
+    tft.print("SCOUT");
+
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(75, 175);
+    tft.print("DISPLAY ONLINE");
+
+    Serial.println("Display test complete.");
 }
 
 void loop()
 {
-    delay(10000);
-    scanWiFi();
 }

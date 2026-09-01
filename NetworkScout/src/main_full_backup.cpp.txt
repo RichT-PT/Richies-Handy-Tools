@@ -1,0 +1,299 @@
+x#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <LovyanGFX.hpp>
+
+// ---------- Display class (confirmed working config for this CYD board) ----------
+class NetworkScoutDisplay : public lgfx::LGFX_Device
+{
+    lgfx::Panel_ILI9341 panel;
+    lgfx::Bus_SPI bus;
+    lgfx::Light_PWM light;
+
+public:
+    NetworkScoutDisplay()
+    {
+        { // SPI bus
+            auto cfg = bus.config();
+            cfg.spi_host = VSPI_HOST;
+            cfg.spi_mode = 0;
+            cfg.freq_write = 40000000;
+            cfg.freq_read  = 16000000;
+            cfg.spi_3wire = true;
+            cfg.use_lock = true;
+            cfg.dma_channel = 1;
+            cfg.pin_sclk = 14;
+            cfg.pin_mosi = 13;
+            cfg.pin_miso = -1;   // not wired on this panel - reading hangs init()
+            cfg.pin_dc   = 2;
+            bus.config(cfg);
+            panel.setBus(&bus);
+        }
+        { // Panel
+            auto cfg = panel.config();
+            cfg.pin_cs   = 15;
+            cfg.pin_rst  = -1;
+            cfg.pin_busy = -1;
+            cfg.panel_width  = 240;
+            cfg.panel_height = 320;
+            cfg.offset_x = 0;
+            cfg.offset_y = 0;
+            cfg.offset_rotation = 0;
+            cfg.readable  = false;
+            cfg.invert    = false;  // confirmed correct for this unit
+            cfg.rgb_order = false;  // confirmed correct for this unit
+            cfg.bus_shared = true;
+            panel.config(cfg);
+        }
+        { // Backlight
+            auto cfg = light.config();
+            cfg.pin_bl      = 27;   // confirmed via multimeter
+            cfg.invert      = false;
+            cfg.freq        = 44100;
+            cfg.pwm_channel = 7;
+            light.config(cfg);
+            panel.setLight(&light);
+        }
+        setPanel(&panel);
+    }
+};
+
+NetworkScoutDisplay tft;
+
+// ---------- Onboard status LED (3 discrete LEDs, active-low, PWM-dimmed) ----------
+#define LED_RED_PIN   4
+#define LED_GREEN_PIN 17
+#define LED_BLUE_PIN  16
+
+#define LED_CH_RED    0
+#define LED_CH_GREEN  1   // channel 7 is used internally by the display backlight
+#define LED_CH_BLUE   2
+
+#define LED_PWM_FREQ  5000
+#define LED_PWM_RES   8
+
+uint8_t ledBrightness = 40; // 0-255
+
+void ledSetup() {
+    ledcSetup(LED_CH_RED,   LED_PWM_FREQ, LED_PWM_RES);
+    ledcSetup(LED_CH_GREEN, LED_PWM_FREQ, LED_PWM_RES);
+    ledcSetup(LED_CH_BLUE,  LED_PWM_FREQ, LED_PWM_RES);
+    ledcAttachPin(LED_RED_PIN,   LED_CH_RED);
+    ledcAttachPin(LED_GREEN_PIN, LED_CH_GREEN);
+    ledcAttachPin(LED_BLUE_PIN,  LED_CH_BLUE);
+}
+
+void statusLed(bool r, bool g, bool b) {
+    ledcWrite(LED_CH_RED,   r ? (255 - ledBrightness) : 255);
+    ledcWrite(LED_CH_GREEN, g ? (255 - ledBrightness) : 255);
+    ledcWrite(LED_CH_BLUE,  b ? (255 - ledBrightness) : 255);
+}
+
+// ---------- Wi-Fi hotspot the scan results are served over ----------
+// Connect your phone/laptop to this network, then browse to the IP printed
+// on the LCD splash screen and in the Serial Monitor (normally 192.168.4.1).
+const char* AP_SSID     = "NetworkScout";
+const char* AP_PASSWORD = "scoutscout123"; // 8+ chars required for WPA2 - change this
+
+WebServer server(80);
+
+// ---------- Cached scan results ----------
+// Cached separately from WiFi.SSID()/RSSI() etc so both the LCD and the web
+// page always render a stable snapshot, even while a new scan is starting.
+struct NetworkInfo {
+    String ssid;
+    int32_t rssi;
+    int channel;
+    bool secure;
+};
+
+const int MAX_NETWORKS = 40;
+NetworkInfo cachedNetworks[MAX_NETWORKS];
+int cachedCount = 0;
+
+void cacheScanResults(int n) {
+    int count = min(n, MAX_NETWORKS);
+
+    // sort indices by RSSI descending (strongest signal first)
+    int idx[MAX_NETWORKS];
+    for (int i = 0; i < count; i++) idx[i] = i;
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (WiFi.RSSI(idx[j]) > WiFi.RSSI(idx[i])) {
+                int t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+            }
+        }
+    }
+
+    cachedCount = count;
+    for (int row = 0; row < count; row++) {
+        int i = idx[row];
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) ssid = "[hidden]";
+        cachedNetworks[row].ssid    = ssid;
+        cachedNetworks[row].rssi    = WiFi.RSSI(i);
+        cachedNetworks[row].channel = WiFi.channel(i);
+        cachedNetworks[row].secure  = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    }
+}
+
+// ---------- LCD layout (landscape, 320x240) ----------
+const int SCREEN_W = 320;
+const int SCREEN_H = 240;
+const int HEADER_H = 20;
+const int ROW_H = 20;
+const int MAX_VISIBLE_ROWS = (SCREEN_H - HEADER_H) / ROW_H;
+
+const unsigned long SCAN_INTERVAL_MS = 6000;
+unsigned long lastScanStart = 0;
+bool resultsDrawnForThisScan = true;
+
+uint16_t rssiColor(int32_t rssi) {
+    if (rssi >= -60) return TFT_GREEN;
+    if (rssi >= -75) return TFT_YELLOW;
+    return TFT_RED;
+}
+
+void drawHeader(bool scanning) {
+    tft.fillRect(0, 0, SCREEN_W, HEADER_H, TFT_NAVY);
+    tft.setTextColor(TFT_WHITE, TFT_NAVY);
+    tft.setTextSize(1);
+    tft.setCursor(4, 6);
+    if (scanning) {
+        tft.print("NETWORK SCOUT   scanning...");
+    } else {
+        tft.printf("NETWORK SCOUT   %d networks", cachedCount);
+    }
+}
+
+void drawNetworkList() {
+    drawHeader(false);
+    tft.fillRect(0, HEADER_H, SCREEN_W, SCREEN_H - HEADER_H, TFT_BLACK);
+    tft.setTextSize(1);
+
+    int rowsToShow = min(cachedCount, MAX_VISIBLE_ROWS);
+    for (int row = 0; row < rowsToShow; row++) {
+        NetworkInfo &net = cachedNetworks[row];
+        int y = HEADER_H + row * ROW_H + 3;
+
+        String ssid = net.ssid;
+        if (ssid.length() > 22) ssid = ssid.substring(0, 21) + "...";
+
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.setCursor(4, y);
+        tft.print(ssid);
+
+        tft.setTextColor(net.secure ? TFT_ORANGE : TFT_DARKGREY, TFT_BLACK);
+        tft.setCursor(185, y);
+        tft.print(net.secure ? "SEC" : "OPEN");
+
+        tft.setTextColor(TFT_CYAN, TFT_BLACK);
+        tft.setCursor(225, y);
+        tft.printf("Ch%2d", net.channel);
+
+        tft.setTextColor(rssiColor(net.rssi), TFT_BLACK);
+        tft.setCursor(265, y);
+        tft.printf("%4ddBm", net.rssi);
+    }
+
+    if (cachedCount > MAX_VISIBLE_ROWS) {
+        tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        tft.setCursor(4, SCREEN_H - 11);
+        tft.printf("+ %d more (weaker signal, not shown)", cachedCount - MAX_VISIBLE_ROWS);
+    }
+}
+
+void startScan() {
+    statusLed(false, false, true); // blue while scanning
+    drawHeader(true);
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true /*async*/, false /*show_hidden*/);
+    resultsDrawnForThisScan = false;
+    lastScanStart = millis();
+}
+
+// ---------- Web page ----------
+void handleRoot() {
+    String html = "<!DOCTYPE html><html><head><meta http-equiv='refresh' content='5'>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>Network Scout</title><style>";
+    html += "body{font-family:monospace;background:#111;color:#eee;padding:10px}";
+    html += "table{width:100%;border-collapse:collapse}";
+    html += "td,th{padding:6px;border-bottom:1px solid #333;text-align:left}";
+    html += ".open{color:#f77}.sec{color:#7f7}";
+    html += "</style></head><body>";
+    html += "<h2>Network Scout</h2>";
+    html += "<p>" + String(cachedCount) + " networks found &middot; refreshes every 5s</p>";
+    html += "<table><tr><th>SSID</th><th>Security</th><th>Ch</th><th>Signal</th></tr>";
+    for (int i = 0; i < cachedCount; i++) {
+        NetworkInfo &net = cachedNetworks[i];
+        html += "<tr><td>" + net.ssid + "</td>";
+        html += "<td class='" + String(net.secure ? "sec" : "open") + "'>";
+        html += String(net.secure ? "SECURED" : "OPEN") + "</td>";
+        html += "<td>" + String(net.channel) + "</td>";
+        html += "<td>" + String(net.rssi) + " dBm</td></tr>";
+    }
+    html += "</table></body></html>";
+    server.send(200, "text/html", html);
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(300);
+
+    ledSetup();
+    statusLed(false, false, false);
+
+    tft.init();
+    tft.setRotation(1);
+    tft.setBrightness(255);
+    tft.fillScreen(TFT_BLACK);
+
+    // AP_STA: host our own hotspot AND scan for other networks at the same time
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    IPAddress apIP = WiFi.softAPIP();
+
+    server.on("/", handleRoot);
+    server.begin();
+
+    Serial.println("Web server started.");
+    Serial.print("Connect to Wi-Fi network: "); Serial.println(AP_SSID);
+    Serial.print("Password: "); Serial.println(AP_PASSWORD);
+    Serial.print("Then browse to: http://"); Serial.println(apIP);
+
+    // Splash screen with connection info, shown briefly on boot
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.setCursor(10, 20);
+    tft.println("NETWORK SCOUT");
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setCursor(10, 60);
+    tft.print("Wi-Fi: "); tft.println(AP_SSID);
+    tft.setCursor(10, 75);
+    tft.print("Pass:  "); tft.println(AP_PASSWORD);
+    tft.setCursor(10, 90);
+    tft.print("URL:   http://"); tft.println(apIP);
+    delay(4000);
+
+    tft.fillScreen(TFT_BLACK);
+    startScan();
+}
+
+void loop() {
+    server.handleClient();
+
+    int scanResult = WiFi.scanComplete();
+
+    if (scanResult >= 0 && !resultsDrawnForThisScan) {
+        statusLed(false, true, false); // green = results shown, idle
+        cacheScanResults(scanResult);
+        drawNetworkList();
+        resultsDrawnForThisScan = true;
+    }
+
+    if (millis() - lastScanStart > SCAN_INTERVAL_MS && scanResult != WIFI_SCAN_RUNNING) {
+        startScan();
+    }
+}

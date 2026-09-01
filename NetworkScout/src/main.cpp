@@ -1,15 +1,26 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <esp_sleep.h>
 #include <LovyanGFX.hpp>
+#include <SPI.h>
+#include <XPT2046_Touchscreen.h>
+
+
+// ============================================================
+// DISPLAY
+// Confirmed working configuration for this board
+// ============================================================
 
 class NetworkScoutDisplay : public lgfx::LGFX_Device
 {
-    lgfx::Panel_ILI9341 panel;   // was Panel_ST7789 - wrong driver for this board
+    lgfx::Panel_ILI9341 panel;
     lgfx::Bus_SPI bus;
-    lgfx::Light_PWM light;       // proper backlight control instead of raw digitalWrite
+    lgfx::Light_PWM light;
 
 public:
     NetworkScoutDisplay()
     {
+        // ---------- SPI bus ----------
         {
             auto cfg = bus.config();
 
@@ -25,13 +36,14 @@ public:
 
             cfg.pin_sclk = 14;
             cfg.pin_mosi = 13;
-            cfg.pin_miso = -1;   // reverted - this panel's MISO/SDO likely isn't wired, reading can hang init()
+            cfg.pin_miso = -1;
             cfg.pin_dc   = 2;
 
             bus.config(cfg);
             panel.setBus(&bus);
         }
 
+        // ---------- LCD panel ----------
         {
             auto cfg = panel.config();
 
@@ -46,22 +58,22 @@ public:
             cfg.offset_y = 0;
             cfg.offset_rotation = 0;
 
-            cfg.dummy_read_pixel = 8;
-            cfg.dummy_read_bits  = 1;
-            cfg.readable  = false;  // reverted - avoid reading from a MISO line that likely isn't connected
-            cfg.invert    = false;   // many of these ILI9341 clones need this for correct (non-inverted) colors
-            cfg.rgb_order = false;   // many of these ILI9341 clones need this for correct (non-inverted) colors
+            cfg.readable = false;
+            cfg.invert = false;
+            cfg.rgb_order = false;
 
             cfg.bus_shared = true;
 
             panel.config(cfg);
         }
 
+        // ---------- Backlight ----------
         {
             auto cfg = light.config();
-            cfg.pin_bl      = 27;   // confirmed by multimeter - this board's backlight is on 27, not 21
-            cfg.invert      = false;
-            cfg.freq        = 44100;
+
+            cfg.pin_bl = 27;
+            cfg.invert = false;
+            cfg.freq = 44100;
             cfg.pwm_channel = 7;
 
             light.config(cfg);
@@ -74,47 +86,905 @@ public:
 
 NetworkScoutDisplay tft;
 
+
+// ============================================================
+// STATUS LED
+// GPIO 4  = red
+// GPIO 17 = green
+// GPIO 16 = blue
+// Active LOW
+// ============================================================
+// ============================================================
+// TOUCHSCREEN
+// XPT2046 resistive touch controller
+// Dedicated SPI bus
+// ============================================================
+
+#define TOUCH_CLK   25
+#define TOUCH_MOSI  32
+#define TOUCH_MISO  39
+#define TOUCH_CS    33
+#define TOUCH_IRQ   36
+#define LED_RED_PIN   4
+#define LED_GREEN_PIN 17
+#define LED_BLUE_PIN  16
+#define LED_CH_RED    0
+#define LED_CH_GREEN  1
+#define LED_CH_BLUE   2
+#define LED_PWM_FREQ  5000
+#define LED_PWM_RES   8
+
+uint8_t ledBrightness = 40;
+
+SPIClass touchSPI(HSPI);
+
+XPT2046_Touchscreen touch(
+    TOUCH_CS,
+    TOUCH_IRQ
+);
+
+void ledSetup()
+bool touchOnline = false;
+unsigned long lastTouchReport = 0;
+
+{
+    ledcSetup(LED_CH_RED, LED_PWM_FREQ, LED_PWM_RES);
+    ledcSetup(LED_CH_GREEN, LED_PWM_FREQ, LED_PWM_RES);
+    ledcSetup(LED_CH_BLUE, LED_PWM_FREQ, LED_PWM_RES);
+
+    ledcAttachPin(LED_RED_PIN, LED_CH_RED);
+    ledcAttachPin(LED_GREEN_PIN, LED_CH_GREEN);
+    ledcAttachPin(LED_BLUE_PIN, LED_CH_BLUE);
+}
+
+void statusLed(bool red, bool green, bool blue)
+{
+    ledcWrite(
+        LED_CH_RED,
+        red ? (255 - ledBrightness) : 255
+    );
+
+    ledcWrite(
+        LED_CH_GREEN,
+        green ? (255 - ledBrightness) : 255
+    );
+
+    ledcWrite(
+        LED_CH_BLUE,
+        blue ? (255 - ledBrightness) : 255
+    );
+}
+
+
+// ============================================================
+// NETWORK DATA
+// ============================================================
+
+struct NetworkInfo
+{
+    String ssid;
+    String bssid;
+    int32_t rssi;
+    int channel;
+    wifi_auth_mode_t security;
+};
+
+const int MAX_NETWORKS = 40;
+
+NetworkInfo cachedNetworks[MAX_NETWORKS];
+int cachedCount = 0;
+
+
+// ============================================================
+// LCD LAYOUT
+// Landscape = 320 x 240
+// ============================================================
+
+const int SCREEN_W = 320;
+const int SCREEN_H = 240;
+
+const int HEADER_H = 20;
+const int ROW_H = 20;
+
+const int MAX_VISIBLE_ROWS =
+    (SCREEN_H - HEADER_H) / ROW_H;
+
+
+// ============================================================
+// SCANNING
+// ============================================================
+
+const unsigned long SCAN_INTERVAL_MS = 6000;
+unsigned long lastScanFinished = 0;
+
+
+uint16_t rssiColor(int32_t rssi)
+{
+    if (rssi >= -60)
+        return TFT_GREEN;
+
+    if (rssi >= -75)
+        return TFT_YELLOW;
+
+    return TFT_RED;
+}
+
+
+const char* securityName(wifi_auth_mode_t auth)
+{
+    switch (auth)
+    {
+        case WIFI_AUTH_OPEN:
+            return "OPEN";
+
+        case WIFI_AUTH_WEP:
+            return "WEP";
+
+        case WIFI_AUTH_WPA_PSK:
+            return "WPA";
+
+        case WIFI_AUTH_WPA2_PSK:
+            return "WPA2";
+
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            return "WPA12";
+
+        case WIFI_AUTH_WPA2_ENTERPRISE:
+            return "ENT";
+
+        case WIFI_AUTH_WPA3_PSK:
+            return "WPA3";
+
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            return "WPA23";
+
+        default:
+            return "SEC";
+    }
+}
+
+
+void drawHeader(bool scanning)
+{
+    tft.fillRect(
+        0,
+        0,
+        SCREEN_W,
+        HEADER_H,
+        TFT_NAVY
+    );
+
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_NAVY
+    );
+
+    tft.setTextSize(1);
+    tft.setCursor(4, 6);
+
+    if (scanning)
+    {
+        tft.print(
+            "NETWORK SCOUT   scanning..."
+        );
+    }
+    else
+    {
+        tft.printf(
+            "NETWORK SCOUT   %d networks",
+            cachedCount
+        );
+    }
+}
+
+
+void drawNetworkList()
+{
+    drawHeader(false);
+
+    tft.fillRect(
+        0,
+        HEADER_H,
+        SCREEN_W,
+        SCREEN_H - HEADER_H,
+        TFT_BLACK
+    );
+
+    tft.setTextSize(1);
+
+    int rowsToShow =
+        min(cachedCount, MAX_VISIBLE_ROWS);
+
+    for (int row = 0;
+         row < rowsToShow;
+         row++)
+    {
+        NetworkInfo &net =
+            cachedNetworks[row];
+
+        int y =
+            HEADER_H +
+            row * ROW_H +
+            3;
+
+        String ssid = net.ssid;
+
+        if (ssid.length() > 22)
+        {
+            ssid =
+                ssid.substring(0, 21)
+                + "...";
+        }
+
+        // SSID
+        tft.setTextColor(
+            TFT_WHITE,
+            TFT_BLACK
+        );
+
+        tft.setCursor(4, y);
+        tft.print(ssid);
+
+        // Security
+        tft.setTextColor(
+            net.security == WIFI_AUTH_OPEN
+                ? TFT_DARKGREY
+                : TFT_ORANGE,
+            TFT_BLACK
+        );
+
+        tft.setCursor(180, y);
+
+        if (net.security == WIFI_AUTH_OPEN)
+            tft.print("OPEN");
+        else
+            tft.print("SEC");
+
+        // Channel
+        tft.setTextColor(
+            TFT_CYAN,
+            TFT_BLACK
+        );
+
+        tft.setCursor(225, y);
+
+        tft.printf(
+            "Ch%2d",
+            net.channel
+        );
+
+        // RSSI
+        tft.setTextColor(
+            rssiColor(net.rssi),
+            TFT_BLACK
+        );
+
+        tft.setCursor(265, y);
+
+        tft.printf(
+            "%4ddBm",
+            net.rssi
+        );
+    }
+
+    if (cachedCount >
+        MAX_VISIBLE_ROWS)
+    {
+        tft.setTextColor(
+            TFT_DARKGREY,
+            TFT_BLACK
+        );
+
+        tft.setCursor(
+            4,
+            SCREEN_H - 11
+        );
+
+        tft.printf(
+            "+ %d more",
+            cachedCount -
+                MAX_VISIBLE_ROWS
+        );
+    }
+}
+
+
+void cacheScanResults(int count)
+{
+    if (count < 0)
+    {
+        cachedCount = 0;
+        return;
+    }
+
+    count =
+        min(count, MAX_NETWORKS);
+
+    int idx[MAX_NETWORKS];
+
+    for (int i = 0;
+         i < count;
+         i++)
+    {
+        idx[i] = i;
+    }
+
+    // Sort strongest RSSI first
+    for (int i = 0;
+         i < count - 1;
+         i++)
+    {
+        for (int j = i + 1;
+             j < count;
+             j++)
+        {
+            if (
+                WiFi.RSSI(idx[j]) >
+                WiFi.RSSI(idx[i])
+            )
+            {
+                int temp = idx[i];
+                idx[i] = idx[j];
+                idx[j] = temp;
+            }
+        }
+    }
+
+    cachedCount = count;
+
+    for (int row = 0;
+         row < count;
+         row++)
+    {
+        int i = idx[row];
+
+        String ssid =
+            WiFi.SSID(i);
+
+        if (ssid.length() == 0)
+            ssid = "[hidden]";
+
+        cachedNetworks[row].ssid =
+            ssid;
+
+        cachedNetworks[row].bssid =
+            WiFi.BSSIDstr(i);
+
+        cachedNetworks[row].rssi =
+            WiFi.RSSI(i);
+
+        cachedNetworks[row].channel =
+            WiFi.channel(i);
+
+        cachedNetworks[row].security =
+            WiFi.encryptionType(i);
+    }
+}
+
+
+void performScan()
+{
+    Serial.println();
+    Serial.println(
+        "========================================"
+    );
+
+    Serial.println(
+        "       NETWORK SCOUT - WIFI SCAN"
+    );
+
+    Serial.println(
+        "========================================"
+    );
+
+    statusLed(
+        false,
+        false,
+        true
+    );
+
+    drawHeader(true);
+
+    WiFi.scanDelete();
+
+    Serial.println(
+        "Starting scan..."
+    );
+
+    // Synchronous STA-only scan
+    // false = not asynchronous
+    // true  = show hidden networks
+    int count =
+        WiFi.scanNetworks(
+            false,
+            true
+        );
+
+    Serial.printf(
+        "Scan returned %d\n",
+        count
+    );
+
+    if (count < 0)
+    {
+        Serial.println(
+            "SCAN FAILED"
+        );
+
+        statusLed(
+            true,
+            false,
+            false
+        );
+
+        tft.fillScreen(
+            TFT_BLACK
+        );
+
+        tft.setTextColor(
+            TFT_RED,
+            TFT_BLACK
+        );
+
+        tft.setTextSize(2);
+        tft.setCursor(70, 100);
+
+        tft.println(
+            "SCAN FAILED"
+        );
+
+        WiFi.scanDelete();
+
+        lastScanFinished =
+            millis();
+
+        return;
+    }
+
+    cacheScanResults(count);
+
+    Serial.printf(
+        "Found %d networks\n\n",
+        cachedCount
+    );
+
+    for (int i = 0;
+         i < cachedCount;
+         i++)
+    {
+        NetworkInfo &net =
+            cachedNetworks[i];
+
+        Serial.printf(
+            "%2d. %s\n",
+            i + 1,
+            net.ssid.c_str()
+        );
+
+        Serial.printf(
+            "    BSSID:    %s\n",
+            net.bssid.c_str()
+        );
+
+        Serial.printf(
+            "    RSSI:     %d dBm\n",
+            net.rssi
+        );
+
+        Serial.printf(
+            "    Channel:  %d\n",
+            net.channel
+        );
+
+        Serial.printf(
+            "    Security: %s\n\n",
+            securityName(
+                net.security
+            )
+        );
+    }
+
+    drawNetworkList();
+
+    statusLed(
+        false,
+        true,
+        false
+    );
+
+    WiFi.scanDelete();
+
+    lastScanFinished =
+        millis();
+}
+
+
+// ============================================================
+// POWER BUTTON
+//
+// GPIO35 has NO internal pull-up.
+// Keep the external 10K resistor:
+//
+// 3V3 --- 10K --- GPIO35
+//                  |
+//               SWITCH
+//                  |
+//                 GND
+//
+// ============================================================
+
+#define PWR_BUTTON_PIN 35
+
+bool pwrButtonWasPressed = false;
+
+unsigned long
+    pwrButtonPressedAt = 0;
+
+const unsigned long
+    PWR_DEBOUNCE_MS = 300;
+
+
+void enterDeepSleep()
+{
+    Serial.println(
+        "Power button pressed - shutting down..."
+    );
+
+    tft.fillScreen(
+        TFT_BLACK
+    );
+
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_BLACK
+    );
+
+    tft.setTextSize(2);
+
+    tft.setCursor(
+        40,
+        100
+    );
+
+    tft.println(
+        "Powering off..."
+    );
+
+    delay(800);
+
+    tft.fillScreen(
+        TFT_BLACK
+    );
+
+    tft.setBrightness(0);
+
+    // Stop PWM control of the RGB LED
+ledcDetachPin(LED_RED_PIN);
+ledcDetachPin(LED_GREEN_PIN);
+ledcDetachPin(LED_BLUE_PIN);
+
+// Active-low LEDs: HIGH = OFF
+pinMode(LED_RED_PIN, OUTPUT);
+pinMode(LED_GREEN_PIN, OUTPUT);
+pinMode(LED_BLUE_PIN, OUTPUT);
+
+digitalWrite(LED_RED_PIN, HIGH);
+digitalWrite(LED_GREEN_PIN, HIGH);
+digitalWrite(LED_BLUE_PIN, HIGH);
+
+WiFi.mode(WIFI_OFF);
+
+    WiFi.mode(
+        WIFI_OFF
+    );
+
+    // Wait for button release
+    while (
+        digitalRead(
+            PWR_BUTTON_PIN
+        ) == LOW
+    )
+    {
+        delay(10);
+    }
+
+    delay(50);
+
+    // Wake when GPIO35 is
+    // pulled LOW again
+    esp_sleep_enable_ext0_wakeup(
+        (gpio_num_t)
+            PWR_BUTTON_PIN,
+        0
+    );
+
+    esp_deep_sleep_start();
+}
+
+
+void checkPowerButton()
+{
+    bool pressed =
+        digitalRead(
+            PWR_BUTTON_PIN
+        ) == LOW;
+
+    if (
+        pressed &&
+        !pwrButtonWasPressed
+    )
+    {
+        pwrButtonWasPressed =
+            true;
+
+        pwrButtonPressedAt =
+            millis();
+    }
+
+    else if (
+        pressed &&
+        pwrButtonWasPressed &&
+        millis() -
+            pwrButtonPressedAt >
+            PWR_DEBOUNCE_MS
+    )
+    {
+        enterDeepSleep();
+    }
+
+    else if (!pressed)
+    {
+        pwrButtonWasPressed =
+            false;
+    }
+}
+
+
+// ============================================================
+// SETUP
+// ============================================================
+
 void setup()
 {
     Serial.begin(115200);
-    delay(500);
+    delay(300);
 
-    Serial.println("LovyanGFX display test starting (ILI9341 config)...");
+    // GPIO35 needs the external 10K
+    // pull-up to 3V3
+    pinMode(
+        PWR_BUTTON_PIN,
+        INPUT
+    );
 
+    // If waking from the button,
+    // wait until it is released.
+    unsigned long releaseWaitStart =
+        millis();
+
+    while (
+        digitalRead(
+            PWR_BUTTON_PIN
+        ) == LOW &&
+        millis() -
+            releaseWaitStart <
+            3000
+    )
+    {
+        delay(10);
+    }
+
+    // ---------- LED ----------
+    ledSetup();
+
+    statusLed(
+        false,
+        false,
+        false
+    );
+
+    // ---------- Display ----------
     tft.init();
+
     tft.setRotation(1);
+
     tft.setBrightness(255);
 
-    Serial.println("RED");
-    tft.fillScreen(TFT_RED);
-    delay(1200);
+    tft.fillScreen(
+        TFT_BLACK
+    );
+    //  Initializing the touchscreen here
+    setupTouch();
 
-    Serial.println("GREEN");
-    tft.fillScreen(TFT_GREEN);
-    delay(1200);
+    // ---------- Wi-Fi ----------
+    //
+    // STA ONLY.
+    // No hotspot.
+    // No web server.
+    //
+    WiFi.mode(
+        WIFI_STA
+    );
 
-    Serial.println("BLUE");
-    tft.fillScreen(TFT_BLUE);
-    delay(1200);
+    WiFi.setAutoReconnect(
+        false
+    );
 
-    tft.fillScreen(TFT_BLACK);
+    WiFi.disconnect(
+        false,
+        false
+    );
 
-    tft.setTextColor(TFT_CYAN);
-    tft.setTextSize(3);
-    tft.setCursor(35, 80);
-    tft.print("NETWORK");
+    delay(250);
 
-    tft.setCursor(70, 120);
-    tft.print("SCOUT");
+    Serial.println();
+    Serial.println(
+        "Network Scout booting..."
+    );
 
-    tft.setTextColor(TFT_WHITE);
+    Serial.print(
+        "ESP32 MAC: "
+    );
+
+    Serial.println(
+        WiFi.macAddress()
+    );
+
+    Serial.println(
+        "Wi-Fi mode: STA only"
+    );
+
+    // ---------- Splash ----------
+    tft.setTextColor(
+        TFT_CYAN,
+        TFT_BLACK
+    );
+
     tft.setTextSize(2);
-    tft.setCursor(75, 175);
-    tft.print("DISPLAY ONLINE");
 
-    Serial.println("Display test complete.");
+    tft.setCursor(
+        72,
+        75
+    );
+
+    tft.println(
+        "NETWORK SCOUT"
+    );
+
+    tft.setTextSize(1);
+
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_BLACK
+    );
+
+    tft.setCursor(
+        92,
+        110
+    );
+
+    tft.println(
+        "STA Wi-Fi Scanner"
+    );
+
+    tft.setCursor(
+        93,
+        130
+    );
+
+    tft.println(
+        "Starting scan..."
+    );
+
+    delay(1500);
+
+    tft.fillScreen(
+        TFT_BLACK
+    );
+
+    performScan();
 }
+
+void setupTouch()
+{
+    Serial.println();
+    Serial.println("Starting touchscreen...");
+
+    touchSPI.begin(
+        TOUCH_CLK,
+        TOUCH_MISO,
+        TOUCH_MOSI,
+        TOUCH_CS
+    );
+
+    touchOnline = touch.begin(touchSPI);
+
+    touch.setRotation(1);
+
+    if (touchOnline)
+    {
+        Serial.println("Touch controller initialized.");
+    }
+    else
+    {
+        Serial.println("Touch controller initialization failed.");
+    }
+}
+
+
+void checkTouch()
+{
+    if (!touchOnline)
+        return;
+
+    // IRQ lets us avoid unnecessary SPI traffic
+    if (!touch.tirqTouched())
+        return;
+
+    if (!touch.touched())
+        return;
+
+    if (millis() - lastTouchReport < 100)
+        return;
+
+    lastTouchReport = millis();
+
+    TS_Point p = touch.getPoint();
+
+    Serial.println();
+    Serial.println("TOUCH DETECTED");
+
+    Serial.printf(
+        "X: %d   Y: %d   Pressure: %d\n",
+        p.x,
+        p.y,
+        p.z
+    );
+
+    // Temporary touch indication on LCD
+    tft.fillRect(
+        0,
+        SCREEN_H - 18,
+        SCREEN_W,
+        18,
+        TFT_DARKGREY
+    );
+
+    tft.setTextColor(
+        TFT_WHITE,
+        TFT_DARKGREY
+    );
+
+    tft.setTextSize(1);
+
+    tft.setCursor(
+        4,
+        SCREEN_H - 13
+    );
+
+    tft.printf(
+        "TOUCH  X:%d  Y:%d  Z:%d",
+        p.x,
+        p.y,
+        p.z
+    );
+}
+// ============================================================
+// LOOP
+// ============================================================
 
 void loop()
 {
+    checkPowerButton();
+    CheckTouch();
+
+    if (
+        millis() -
+            lastScanFinished >=
+        SCAN_INTERVAL_MS
+    )
+    {
+        performScan();
+    }
+
+    delay(10);
 }

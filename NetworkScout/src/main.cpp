@@ -123,9 +123,10 @@ XPT2046_Touchscreen touch(
     TOUCH_IRQ
 );
 
-void ledSetup()
 bool touchOnline = false;
 unsigned long lastTouchReport = 0;
+
+void ledSetup()
 
 {
     ledcSetup(LED_CH_RED, LED_PWM_FREQ, LED_PWM_RES);

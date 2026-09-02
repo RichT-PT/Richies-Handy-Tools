@@ -1,0 +1,97 @@
+﻿#######################################
+# Syntax Coloring Map For DIYables_TFT_SPI
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+DIYables_TFT_SPI	KEYWORD1
+DIYables_ILI9341_SPI	KEYWORD1
+DIYables_ILI9488_SPI	KEYWORD1
+DIYables_ST7789_SPI	KEYWORD1
+DIYables_TouchScreen	KEYWORD1
+DIYables_XPT2046	KEYWORD1
+TSPoint	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+begin	KEYWORD2
+drawPixel	KEYWORD2
+fillScreen	KEYWORD2
+fillRect	KEYWORD2
+drawFastHLine	KEYWORD2
+drawFastVLine	KEYWORD2
+setRotation	KEYWORD2
+invertDisplay	KEYWORD2
+setAddrWindow	KEYWORD2
+pushColors	KEYWORD2
+drawRGBBitmap	KEYWORD2
+startWrite	KEYWORD2
+endWrite	KEYWORD2
+colorRGB	KEYWORD2
+initTouch	KEYWORD2
+initTouchSPI	KEYWORD2
+setTouchCalibration	KEYWORD2
+setTouchInvert	KEYWORD2
+setTouchInvertX	KEYWORD2
+setTouchInvertY	KEYWORD2
+setTouchInvertScreenX	KEYWORD2
+setTouchInvertScreenY	KEYWORD2
+setADCResolution	KEYWORD2
+readTouchRaw	KEYWORD2
+getTouch	KEYWORD2
+isTouching	KEYWORD2
+pressure	KEYWORD2
+readTouchX	KEYWORD2
+readTouchY	KEYWORD2
+getPoint	KEYWORD2
+initBacklight	KEYWORD2
+backlightOn	KEYWORD2
+backlightOff	KEYWORD2
+setBacklight	KEYWORD2
+#######################################
+# Syntax Coloring Map For DIYables_TFT_SPI
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+DIYables_TFT_SPIKEYWORD1
+DIYables_ILI9341_SPIKEYWORD1
+DIYables_ILI9488_SPIKEYWORD1
+DIYables_ST7789_SPIKEYWORD1
+DIYables_TouchScreenKEYWORD1
+TSPointKEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+beginKEYWORD2
+drawPixelKEYWORD2
+fillScreenKEYWORD2
+fillRectKEYWORD2
+drawFastHLineKEYWORD2
+drawFastVLineKEYWORD2
+setRotationKEYWORD2
+invertDisplayKEYWORD2
+setAddrWindowKEYWORD2
+pushColorsKEYWORD2
+drawRGBBitmapKEYWORD2
+startWriteKEYWORD2
+endWriteKEYWORD2
+colorRGBKEYWORD2
+initTouchKEYWORD2
+setTouchCalibrationKEYWORD2
+setADCResolutionKEYWORD2
+readTouchRawKEYWORD2
+getTouchKEYWORD2
+isTouchingKEYWORD2
+pressureKEYWORD2
+readTouchXKEYWORD2
+readTouchYKEYWORD2
+getPointKEYWORD2
+initBacklightKEYWORD2
+backlightOnKEYWORD2
+backlightOffKEYWORD2
+setBacklightKEYWORD2

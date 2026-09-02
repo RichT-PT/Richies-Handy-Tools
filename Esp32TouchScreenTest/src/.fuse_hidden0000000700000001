@@ -1,0 +1,142 @@
+#include <Arduino.h>
+#include <Wire.h>
+
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
+
+// Back to the known-good display config (MISO disabled again - re-enabling
+// it hung tft.init() just now, confirming GPIO12 isn't a real MISO line on
+// this board). Now testing the third possibility from the universal CYD
+// diagnostic file: capacitive touch over I2C instead of any SPI scheme.
+// Scans both SDA/SCL orderings since those can be swapped too.
+//
+// Your touch-paint UI is safely backed up as
+// src/main_touch_ui_backup.cpp.txt - nothing has been lost.
+
+class KnownGoodDisplay : public lgfx::LGFX_Device
+{
+    lgfx::Panel_ILI9341 panel;
+    lgfx::Bus_SPI bus;
+    lgfx::Light_PWM light;
+
+public:
+    KnownGoodDisplay()
+    {
+        {
+            auto cfg = bus.config();
+            cfg.spi_host = VSPI_HOST;
+            cfg.spi_mode = 0;
+            cfg.freq_write = 40000000;
+            cfg.freq_read  = 16000000;
+            cfg.spi_3wire = true;
+            cfg.use_lock = true;
+            cfg.dma_channel = 1;
+            cfg.pin_sclk = 14;
+            cfg.pin_mosi = 13;
+            cfg.pin_miso = -1;
+            cfg.pin_dc   = 2;
+            bus.config(cfg);
+            panel.setBus(&bus);
+        }
+        {
+            auto cfg = panel.config();
+            cfg.pin_cs   = 15;
+            cfg.pin_rst  = -1;
+            cfg.pin_busy = -1;
+            cfg.panel_width  = 240;
+            cfg.panel_height = 320;
+            cfg.offset_x = 0;
+            cfg.offset_y = 0;
+            cfg.offset_rotation = 0;
+            cfg.readable = false;
+            cfg.invert = false;
+            cfg.rgb_order = false;
+            cfg.bus_shared = true;
+            panel.config(cfg);
+        }
+        {
+            auto cfg = light.config();
+            cfg.pin_bl = 27;
+            cfg.invert = false;
+            cfg.freq = 44100;
+            cfg.pwm_channel = 7;
+            light.config(cfg);
+            panel.setLight(&light);
+        }
+        setPanel(&panel);
+    }
+};
+
+KnownGoodDisplay tft;
+
+struct I2CPins { const char* name; int sda; int scl; };
+I2CPins candidates[] = {
+    { "SDA=33 SCL=32", 33, 32 },
+    { "SDA=32 SCL=33", 32, 33 },
+};
+const int numCandidates = sizeof(candidates) / sizeof(candidates[0]);
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(500);
+    Serial.println();
+    Serial.println("I2C touch scan starting...");
+
+    tft.init();
+    tft.setRotation(1);
+    tft.setBrightness(200);
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 10);
+    tft.println("I2C SCAN");
+    tft.setTextSize(1);
+    tft.setCursor(10, 40);
+    tft.println("Checking for a capacitive");
+    tft.setCursor(10, 52);
+    tft.println("touch controller...");
+}
+
+void loop()
+{
+    for (int c = 0; c < numCandidates; c++)
+    {
+        Serial.println();
+        Serial.print("=== Trying ");
+        Serial.print(candidates[c].name);
+        Serial.println(" ===");
+
+        tft.fillRect(10, 70, 300, 140, TFT_BLACK);
+        tft.setCursor(10, 70);
+        tft.println(candidates[c].name);
+
+        Wire.begin(candidates[c].sda, candidates[c].scl);
+
+        int row = 85;
+        bool found = false;
+        for (byte addr = 8; addr < 120; addr++)
+        {
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0)
+            {
+                found = true;
+                Serial.printf("  Found device at 0x%02X\n", addr);
+                tft.setTextColor(TFT_GREEN, TFT_BLACK);
+                tft.setCursor(10, row);
+                tft.printf("Found: 0x%02X", addr);
+                row += 12;
+            }
+        }
+        if (!found)
+        {
+            Serial.println("  Nothing found.");
+            tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+            tft.setCursor(10, row);
+            tft.println("Nothing found.");
+        }
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+        delay(3000);
+    }
+}

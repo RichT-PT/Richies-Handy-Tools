@@ -396,7 +396,7 @@ void drawNetworkList()
         int y =
             HEADER_H +
             row * ROW_H +
-            3;
+            6;
 
         String ssid = net.ssid;
 
@@ -478,7 +478,42 @@ void drawNetworkList()
         );
     }
 }
+// ============================================================
+// TCI/UI - Static list framework
+// ============================================================
 
+void drawUiFramework()
+{
+    // Row separators
+    for (int row = 0; row <= MAX_VISIBLE_ROWS; row++)
+    {
+        int y = LIST_TOP + row * ROW_H;
+
+        tft.drawFastHLine(
+            0,
+            y,
+            SCREEN_W,
+            TFT_DARKGREY
+        );
+    }
+
+    // Footer boundary
+    tft.drawFastHLine(
+        0,
+        LIST_BOTTOM,
+        SCREEN_W,
+        TFT_WHITE
+    );
+
+    // Footer background
+    tft.fillRect(
+        0,
+        LIST_BOTTOM + 1,
+        SCREEN_W,
+        FOOTER_H - 1,
+        TFT_NAVY
+    );
+}
 
 void cacheScanResults(int count)
 {
@@ -676,6 +711,7 @@ void performScan()
     }
 
     drawNetworkList();
+    drawUiFramework();   // TCI/UI
 
     statusLed(
         false,

@@ -121,7 +121,10 @@ SPIClass touchSPI(HSPI);
 XPT2046_Touchscreen touch(
     TOUCH_CS,
     TOUCH_IRQ
+    
 );
+void setupTouch();
+void checkTouch();
 
 bool touchOnline = false;
 unsigned long lastTouchReport = 0;
@@ -976,7 +979,7 @@ void checkTouch()
 void loop()
 {
     checkPowerButton();
-    CheckTouch();
+    checkTouch();
 
     if (
         millis() -

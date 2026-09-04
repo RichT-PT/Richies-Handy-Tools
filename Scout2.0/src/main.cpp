@@ -25,6 +25,7 @@ class NetworkScoutDisplay : public lgfx::LGFX_Device
     lgfx::Panel_ILI9341 panel;
     lgfx::Bus_SPI bus;
     lgfx::Light_PWM light;
+    lgfx::Touch_XPT2046 touchController;   // TCI - shared-bus touch
 
 public:
     NetworkScoutDisplay()
@@ -45,7 +46,7 @@ public:
 
             cfg.pin_sclk = 14;
             cfg.pin_mosi = 13;
-            cfg.pin_miso = -1;
+            cfg.pin_miso = 12;   // TCI - shared SPI MISO for XPT2046
             cfg.pin_dc   = 2;
 
             bus.config(cfg);
@@ -88,7 +89,40 @@ public:
             light.config(cfg);
             panel.setLight(&light);
         }
+// ============================================================
+// TCI - XPT2046 on same VSPI bus as display
+// ============================================================
+{
+    auto cfg = touchController.config();
 
+    // Measured raw range from this touchscreen
+    cfg.x_min = 215;
+    cfg.x_max = 3675;
+    cfg.y_min = 280;
+    cfg.y_max = 3520;
+
+    // Polling only - GPIO36 IRQ is deliberately not used
+    cfg.pin_int = -1;
+
+    // LCD and touch share SCLK/MOSI
+    cfg.bus_shared = true;
+
+    // We'll correct orientation after basic communication works
+    cfg.offset_rotation = 0;
+
+    // SAME SPI peripheral as the display
+    cfg.spi_host = VSPI_HOST;
+    cfg.freq = 1000000;
+
+    cfg.pin_sclk = 14;
+    cfg.pin_mosi = 13;
+    cfg.pin_miso = 12;
+    cfg.pin_cs   = 33;
+
+    touchController.config(cfg);
+
+    panel.setTouch(&touchController);
+}/// ADDED BLOCK ^^^^^^^^^^^^^^^^^^^^^^^^
         setPanel(&panel);
     }
 };
@@ -126,11 +160,11 @@ NetworkScoutDisplay tft;
 #define TOUCH_MOSI  13
 #define TOUCH_MISO  12
 #define TOUCH_CS    33
-#define TOUCH_IRQ   36
+#define TOUCH_IRQ 36   // TCI - diagnostic only, not used by touch driver
 
 // TCI - Touchscreen objects/state
 SPIClass touchSPI(HSPI);
-XPT2046_Touchscreen touch(TOUCH_CS, TOUCH_IRQ);
+XPT2046_Touchscreen touch(TOUCH_CS);   // TCI - polling mode, IRQ not used
 
 bool touchOnline = false;
 unsigned long lastTouchReport = 0;
@@ -139,7 +173,35 @@ unsigned long lastTouchReport = 0;
 
 uint8_t ledBrightness = 40;
 
-void setupTouch();   // TCI
+// ============================================================
+// TCI - Touchscreen initialization
+// Donor: Esp32TouchScreenTest
+// ============================================================
+void setupTouch()
+{
+    Serial.println("Starting touchscreen...");
+
+   touchSPI.begin(
+       TOUCH_CLK,
+       TOUCH_MISO,
+       TOUCH_MOSI,
+       TOUCH_CS
+   );
+
+    pinMode(TOUCH_CS, OUTPUT);
+    digitalWrite(TOUCH_CS, HIGH);
+
+ //   touchOnline = touch.begin(touchSPI);
+
+    touch.setRotation(1);
+
+    Serial.println(
+        touchOnline
+            ? "Touch controller initialized."
+            : "Touch controller initialization failed."
+    );
+}
+///  TCI - Touchscreen section above void setupTouch()  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 void checkTouch();   // TCI
 
 void ledSetup()
@@ -810,7 +872,13 @@ void setup()
         TFT_BLACK
     );
     //  Initializing the touchscreen here
-    
+    // ============================================================
+// TCI - Touchscreen initialization
+// Donor: Esp32TouchScreenTest
+// ============================================================
+
+// setupTouch();   // TCI
+
 
     // ---------- Wi-Fi ----------
     //
@@ -907,6 +975,27 @@ void setup()
 void loop()
 {
     checkPowerButton();
+    // ============================================================
+// TCI - Touch read test
+// ============================================================
+int32_t touchX;
+int32_t touchY;
+
+if (tft.getTouch(&touchX, &touchY))
+{
+    static unsigned long lastTouchPrint = 0;
+
+    if (millis() - lastTouchPrint >= 100)
+    {
+        lastTouchPrint = millis();
+
+        Serial.printf(
+            "TCI TOUCH  X:%ld  Y:%ld\n",
+            touchX,
+            touchY
+        );
+    }
+}
 
     if (
         millis() -

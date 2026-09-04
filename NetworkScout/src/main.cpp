@@ -3,7 +3,6 @@
 #include <esp_sleep.h>
 #include <LovyanGFX.hpp>
 #include <SPI.h>
-#include <XPT2046_Touchscreen.h>
 
 
 // ============================================================
@@ -100,11 +99,6 @@ NetworkScoutDisplay tft;
 // Dedicated SPI bus
 // ============================================================
 
-#define TOUCH_CLK   25
-#define TOUCH_MOSI  32
-#define TOUCH_MISO  39
-#define TOUCH_CS    33
-#define TOUCH_IRQ   36
 #define LED_RED_PIN   4
 #define LED_GREEN_PIN 17
 #define LED_BLUE_PIN  16
@@ -115,19 +109,6 @@ NetworkScoutDisplay tft;
 #define LED_PWM_RES   8
 
 uint8_t ledBrightness = 40;
-
-SPIClass touchSPI(HSPI);
-
-XPT2046_Touchscreen touch(
-    TOUCH_CS,
-    TOUCH_IRQ
-    
-);
-void setupTouch();
-void checkTouch();
-
-bool touchOnline = false;
-unsigned long lastTouchReport = 0;
 
 void ledSetup()
 
@@ -797,7 +778,7 @@ void setup()
         TFT_BLACK
     );
     //  Initializing the touchscreen here
-    setupTouch();
+    
 
     // ---------- Wi-Fi ----------
     //
@@ -887,91 +868,6 @@ void setup()
 
     performScan();
 }
-
-void setupTouch()
-{
-    Serial.println();
-    Serial.println("Starting touchscreen...");
-
-    touchSPI.begin(
-        TOUCH_CLK,
-        TOUCH_MISO,
-        TOUCH_MOSI,
-        TOUCH_CS
-    );
-
-    touchOnline = touch.begin(touchSPI);
-
-    touch.setRotation(1);
-
-    if (touchOnline)
-    {
-        Serial.println("Touch controller initialized.");
-    }
-    else
-    {
-        Serial.println("Touch controller initialization failed.");
-    }
-}
-
-
-void checkTouch()
-{
-    if (!touchOnline)
-        return;
-
-    // IRQ lets us avoid unnecessary SPI traffic
-    if (!touch.tirqTouched())
-        return;
-
-    if (!touch.touched())
-        return;
-
-    if (millis() - lastTouchReport < 100)
-        return;
-
-    lastTouchReport = millis();
-
-    TS_Point p = touch.getPoint();
-
-    Serial.println();
-    Serial.println("TOUCH DETECTED");
-
-    Serial.printf(
-        "X: %d   Y: %d   Pressure: %d\n",
-        p.x,
-        p.y,
-        p.z
-    );
-
-    // Temporary touch indication on LCD
-    tft.fillRect(
-        0,
-        SCREEN_H - 18,
-        SCREEN_W,
-        18,
-        TFT_DARKGREY
-    );
-
-    tft.setTextColor(
-        TFT_WHITE,
-        TFT_DARKGREY
-    );
-
-    tft.setTextSize(1);
-
-    tft.setCursor(
-        4,
-        SCREEN_H - 13
-    );
-
-    tft.printf(
-        "TOUCH  X:%d  Y:%d  Z:%d",
-        p.x,
-        p.y,
-        p.z
-    );
-}
 // ============================================================
 // LOOP
 // ============================================================
@@ -979,7 +875,6 @@ void checkTouch()
 void loop()
 {
     checkPowerButton();
-    checkTouch();
 
     if (
         millis() -

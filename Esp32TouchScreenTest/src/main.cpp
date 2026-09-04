@@ -12,7 +12,7 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <SPI.h>
-#include <XPT2046_Touchscreen.h>
+#include <XPT2046_Touchscreen.h> // added for TCI 
 
 // ============================================================
 // DISPLAY — identical to Scout's NetworkScoutDisplay
@@ -78,11 +78,12 @@ TestDisplay tft;
 // TOUCHSCREEN — same pins as Scout
 // ============================================================
 
-#define TOUCH_CLK   14
+#define TOUCH_CLK   14 /// USED THIS WHOLE SECTION FOR TOUCHSCREEN INTEGRATION (TCI)    
 #define TOUCH_MOSI  13
 #define TOUCH_MISO  12
 #define TOUCH_CS    33
 #define TOUCH_IRQ   36
+
 
 SPIClass touchSPI(HSPI);
 XPT2046_Touchscreen touch(TOUCH_CS, TOUCH_IRQ);
@@ -91,7 +92,7 @@ bool touchOnline = false;
 unsigned long lastTouchReport = 0;
 
 const int SCREEN_W = 320;
-const int SCREEN_H = 240;
+const int SCREEN_H = 240; ////  ^^^^^^^^^^^^^^
 
 // Raw hardware sanity check, done BEFORE the SPI library touches anything.
 // The XPT2046's IRQ pin is open-drain and idles HIGH via a pull-up — either

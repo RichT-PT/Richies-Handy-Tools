@@ -259,14 +259,26 @@ int cachedCount = 0;
 // Landscape = 320 x 240
 // ============================================================
 
+// const int SCREEN_W = 320;
+// const int SCREEN_H = 240;
+
+// const int HEADER_H = 20;  REPLACED WITH BELOW BLOCK TO BUILD CELLS
+// const int ROW_H = 20;
+
+// const int MAX_VISIBLE_ROWS =
+//     (SCREEN_H - HEADER_H) / ROW_H;
 const int SCREEN_W = 320;
 const int SCREEN_H = 240;
 
 const int HEADER_H = 20;
+const int FOOTER_H = 20;     // TCI/UI - reserved control area
 const int ROW_H = 20;
 
+const int LIST_TOP = HEADER_H;
+const int LIST_BOTTOM = SCREEN_H - FOOTER_H;
+
 const int MAX_VISIBLE_ROWS =
-    (SCREEN_H - HEADER_H) / ROW_H;
+    (LIST_BOTTOM - LIST_TOP) / ROW_H;
 
 
 // ============================================================

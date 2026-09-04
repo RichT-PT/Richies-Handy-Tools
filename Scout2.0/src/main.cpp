@@ -1,8 +1,18 @@
+// ============================================================
+// TCI = Touchscreen Integration
+// Donor: Esp32TouchScreenTest
+// All touchscreen integration additions are marked TCI.
+// ============================================================
+
+
+
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <LovyanGFX.hpp>
 #include <SPI.h>
+#include <XPT2046_Touchscreen.h>   // TCI
 
 
 // ============================================================
@@ -107,8 +117,30 @@ NetworkScoutDisplay tft;
 #define LED_CH_BLUE   2
 #define LED_PWM_FREQ  5000
 #define LED_PWM_RES   8
+// ============================================================
+// TCI - Touchscreen hardware
+// ============================================================
+// VVVVVVV section added for TCI VVVVVVV
+
+#define TOUCH_CLK   14
+#define TOUCH_MOSI  13
+#define TOUCH_MISO  12
+#define TOUCH_CS    33
+#define TOUCH_IRQ   36
+
+// TCI - Touchscreen objects/state
+SPIClass touchSPI(HSPI);
+XPT2046_Touchscreen touch(TOUCH_CS, TOUCH_IRQ);
+
+bool touchOnline = false;
+unsigned long lastTouchReport = 0;
+// ^^^^^^^ section added for TCI ^^^^^^^ 
+
 
 uint8_t ledBrightness = 40;
+
+void setupTouch();   // TCI
+void checkTouch();   // TCI
 
 void ledSetup()
 

@@ -1,4 +1,31 @@
 // ============================================================
+// SCOUT2.0 CODE MAP
+//
+// // 1. INCLUDES / LIBRARIES
+//
+// 2. GLOBAL DEFINITIONS
+//    ├─ Hardware objects
+//    ├─ GPIO pin definitions
+//    ├─ Constants / screen geometry
+//    ├─ State variables
+//    ├─ Data structures / arrays
+//    └─ FUNCTION PROTOTYPES   <-- here
+//
+// 3. HELPER FUNCTION DEFINITIONS
+//    ├─ drawHeader()
+//    ├─ drawNetworkList()
+//    ├─ drawSelectionHighlight()
+//    ├─ selectNetworkAtTouch()
+//    ├─ performScan()
+//    └─ etc.
+//
+// 4. setup()
+//
+// 5. loop()
+// ============================================================
+
+
+// ============================================================
 // TCI = Touchscreen Integration
 // Donor: Esp32TouchScreenTest
 // All touchscreen integration additions are marked TCI.
@@ -161,6 +188,9 @@ NetworkScoutDisplay tft;
 #define TOUCH_MISO  12
 #define TOUCH_CS    33
 #define TOUCH_IRQ 36   // TCI - diagnostic only, not used by touch driver
+// dislpay button to toggle size and rows on screen
+#define DISPLAY_BUTTON_PIN 21   // TCI/UI physical button
+
 
 // TCI - Touchscreen objects/state
 SPIClass touchSPI(HSPI);
@@ -173,6 +203,7 @@ unsigned long lastTouchReport = 0;
 
 uint8_t ledBrightness = 40;
 
+void drawSelectionHighlight();
 // ============================================================
 // TCI - Touchscreen initialization
 // Donor: Esp32TouchScreenTest
@@ -272,21 +303,36 @@ const int SCREEN_H = 240;
 
 const int HEADER_H = 20;
 const int FOOTER_H = 20;     // TCI/UI - reserved control area
-const int ROW_H = 20;
+//const int ROW_H = 20;
 
 const int LIST_TOP = HEADER_H;
 const int LIST_BOTTOM = SCREEN_H - FOOTER_H;
 
-const int MAX_VISIBLE_ROWS =
-    (LIST_BOTTOM - LIST_TOP) / ROW_H;
+//const int MAX_VISIBLE_ROWS =
+//    (LIST_BOTTOM - LIST_TOP) / ROW_H;
+// ============================================================
+// TCI/UI - Display density
+// GPIO21 cycles through three row sizes.
+// ============================================================
 
+int displayDensity = 0;
 
+int ROW_H = 20;
+int MAX_VISIBLE_ROWS = 10;
+
+// ============================================================
+// TCI/UI - Network selection state
+// ============================================================
+
+int scrollOffset = 0;          // Future scrolling support
+int selectedNetworkIndex = -1; // -1 = nothing selected
 // ============================================================
 // SCANNING
 // ============================================================
 
 const unsigned long SCAN_INTERVAL_MS = 6000;
 unsigned long lastScanFinished = 0;
+bool scanPaused = true;   // TCI/UI - HOLD list after initial startup scan
 
 
 uint16_t rssiColor(int32_t rssi)
@@ -481,6 +527,39 @@ void drawNetworkList()
 // ============================================================
 // TCI/UI - Static list framework
 // ============================================================
+// ============================================================
+// TCI/UI - Apply display density
+// 0 = Compact, 1 = Medium, 2 = Large
+// ============================================================
+
+void applyDisplayDensity()
+{
+    switch (displayDensity)
+    {
+        case 0:
+            ROW_H = 20;
+            MAX_VISIBLE_ROWS = 10;
+            Serial.println("DISPLAY: COMPACT - 10 rows");
+            break;
+
+        case 1:
+            ROW_H = 28;
+            MAX_VISIBLE_ROWS = 7;
+            Serial.println("DISPLAY: MEDIUM - 7 rows");
+            break;
+
+        case 2:
+            ROW_H = 40;
+            MAX_VISIBLE_ROWS = 5;
+            Serial.println("DISPLAY: LARGE - 5 rows");
+            break;
+    }
+}
+// Draws lines as referernce for the cells for the touch selection
+// this function will be deactivated because it is just a tool for building. can be
+// can be adde back by uncommenting the call out
+// will leave it here but comment out the call only at the end of the file
+
 
 void drawUiFramework()
 {
@@ -512,6 +591,142 @@ void drawUiFramework()
         SCREEN_W,
         FOOTER_H - 1,
         TFT_NAVY
+    );
+}
+
+// ============================================================
+// TCI/UI - Touch hitbox test
+// Converts screen Y position into the fixed visible row.
+// No network action is performed yet.
+// ============================================================
+
+void reportTouchHitbox(int32_t x, int32_t y)
+{
+    // Header
+    if (y < LIST_TOP)
+    {
+        Serial.printf(
+            "TCI HIT: HEADER  X:%ld Y:%ld\n",
+            x,
+            y
+        );
+        return;
+    }
+
+    // Footer
+    if (y >= LIST_BOTTOM)
+    {
+        Serial.printf(
+            "TCI HIT: FOOTER  X:%ld Y:%ld\n",
+            x,
+            y
+        );
+        return;
+    }
+
+    // Network list
+    int visibleRow =
+        (y - LIST_TOP) / ROW_H;
+
+    Serial.printf(
+        "TCI HIT: ROW %d  X:%ld Y:%ld\n",
+        visibleRow,
+        x,
+        y
+    );
+}
+// ============================================================
+// TCI/UI - Select network from touchscreen row
+// ============================================================
+
+void selectNetworkAtTouch(int32_t x, int32_t y)
+{
+    // Ignore header and footer
+    if (
+        y < LIST_TOP ||
+        y >= LIST_BOTTOM
+    )
+        return;
+
+    int visibleRow =
+        (y - LIST_TOP) / ROW_H;
+
+    int networkIndex =
+        scrollOffset + visibleRow;
+
+    // Ignore empty rows
+    if (
+        networkIndex < 0 ||
+        networkIndex >= cachedCount
+    )
+        return;
+
+    selectedNetworkIndex =
+        networkIndex;
+
+    NetworkInfo &net =
+        cachedNetworks[selectedNetworkIndex];
+
+    Serial.println();
+    Serial.println("TCI NETWORK SELECTED");
+
+    Serial.printf(
+        "Index: %d\n",
+        selectedNetworkIndex
+    );
+
+    Serial.printf(
+        "SSID: %s\n",
+        net.ssid.c_str()
+    );
+
+    Serial.printf(
+        "BSSID: %s\n",
+        net.bssid.c_str()
+    );
+
+    Serial.printf(
+        "RSSI: %d dBm\n",
+        net.rssi
+    );
+
+    // Redraw clean list, then mark selection
+    drawNetworkList();
+
+    // Keep guide lines during testing
+    drawUiFramework();
+
+    drawSelectionHighlight();
+}
+// ============================================================
+// TCI/UI - Draw selected network row
+// ============================================================
+
+void drawSelectionHighlight()
+{
+    if (selectedNetworkIndex < 0)
+        return;
+
+    int visibleRow =
+        selectedNetworkIndex - scrollOffset;
+
+    // Selected network may eventually be offscreen after scrolling
+    if (
+        visibleRow < 0 ||
+        visibleRow >= MAX_VISIBLE_ROWS
+    )
+        return;
+
+    int y =
+        LIST_TOP +
+        visibleRow * ROW_H;
+
+    tft.drawRect(
+        0,
+        y,
+        SCREEN_W,
+        ROW_H,
+        TFT_YELLOW
     );
 }
 
@@ -883,6 +1098,10 @@ void setup()
         INPUT
     );
 
+    pinMode(  // io21 button to toggle size and rows on screen
+        DISPLAY_BUTTON_PIN,
+        INPUT_PULLUP);   // TCI/UI
+
     // If waking from the button,
     // wait until it is released.
     unsigned long releaseWaitStart =
@@ -1042,17 +1261,60 @@ if (tft.getTouch(&touchX, &touchY))
             touchX,
             touchY
         );
+
+        reportTouchHitbox( // TCI/UI
+            touchX,
+            touchY
+        );
+        selectNetworkAtTouch(
+            touchX,
+            touchY
+        );   // TCI/UI
     }
 }
 
-    if (
-        millis() -
-            lastScanFinished >=
-        SCAN_INTERVAL_MS
-    )
-    {
-        performScan();
-    }
+    // if (
+    //     millis() -
+    //         lastScanFinished >=
+    //     SCAN_INTERVAL_MS    // temp pause for testing
+    // )
+    // {
+    //     performScan();
+    // }
+if (
+    !scanPaused &&
+    millis() -
+        lastScanFinished >=  //  added to pause scanning for testing
+    SCAN_INTERVAL_MS
+)
+{
+    performScan();
+}
+//
+static bool lastDisplayButtonState = HIGH;
+
+bool displayButtonState =
+    digitalRead(DISPLAY_BUTTON_PIN);
+
+if (
+    displayButtonState == LOW &&
+    lastDisplayButtonState == HIGH
+)
+{
+    displayDensity++;
+
+    if (displayDensity > 2)
+        displayDensity = 0;
+
+    applyDisplayDensity();
+
+    drawNetworkList();
+    drawUiFramework();   // TCI/UI - active while testing
+}
+
+lastDisplayButtonState =
+    displayButtonState;
+
 
     delay(10);
 }

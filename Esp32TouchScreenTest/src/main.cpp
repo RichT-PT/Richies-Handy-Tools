@@ -159,20 +159,41 @@ void rawSpiProbe()
         delay(150);
     }
 }
+// TCI DONOR REFERENCE:
+// This setupTouch() block helped establish the working XPT2046 hardware path.
+// Scout2.0 did NOT copy this initialization directly.
+// The separate HSPI approach conflicted with the LCD, so Scout2.0 uses
+// LovyanGFX shared-bus touch instead.
+
 
 void setupTouch()
 {
     Serial.println("Starting touchscreen...");
     checkIrqLineRaw();
-    touchSPI.begin(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
+    touchSPI.begin(
+        TOUCH_CLK,
+        TOUCH_MISO,
+        TOUCH_MOSI,
+        TOUCH_CS
+    );
+
     pinMode(TOUCH_CS, OUTPUT);
     digitalWrite(TOUCH_CS, HIGH);
-    rawSpiProbe();
+
+    rawSpiProbe();   // TCI DONOR: diagnostic only; not used in Scout2.0
+
     touchOnline = touch.begin(touchSPI);
+
     touch.setRotation(1);
-    Serial.println(touchOnline ? "Touch controller initialized." : "Touch controller initialization failed.");
+
+    Serial.println(
+        touchOnline
+            ? "Touch controller initialized."
+            : "Touch controller initialization failed."
+        );
 }
 
+// TCI DONOR: setupTouch() reference block ends here.
 // last crosshair position, so we can erase it before drawing the new one
 int lastX = -1, lastY = -1;
 
